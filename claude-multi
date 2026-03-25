@@ -457,16 +457,22 @@ def enrich_with_team_context(projects: list[dict]) -> list[dict]:
                     team_desc.append(f"  - {t['name']} ({t.get('model', 'default')})")
 
             collab_prompt = (
-                f"\n\n## Team Collaboration\n"
+                f"\n\n## MANDATORY FIRST ACTION\n"
+                f"Before doing ANYTHING else, you MUST read the file `{SHARED_FILE}` in the project root.\n"
+                f"This file contains critical context from your teammates. Do not skip this step.\n"
+                f"If the file does not exist, create it with a header noting your role.\n"
+                f"\n## Team Collaboration\n"
                 f"You are part of a team of Claude sessions working on this project simultaneously.\n"
+                f"Your role: **{proj['name']}**\n"
                 f"Your teammates:\n" + "\n".join(team_desc) + "\n\n"
                 f"Coordination rules:\n"
-                f"- Read `{SHARED_FILE}` at the start of your work and before major decisions.\n"
-                f"- Write your key findings, decisions, and warnings to `{SHARED_FILE}`.\n"
-                f"- Prefix your entries with your role name [{proj['name']}].\n"
+                f"- ALWAYS read `{SHARED_FILE}` before starting any task and before major decisions.\n"
+                f"- ALWAYS write your key findings, decisions, progress, and warnings to `{SHARED_FILE}` after completing work.\n"
+                f"- Prefix ALL your entries with your role name [{proj['name']}] and a timestamp.\n"
                 f"- Do NOT edit or delete other sessions' entries.\n"
-                f"- If you see a warning or blocker from a teammate, acknowledge it.\n"
-                f"- Coordinate on shared files — if a teammate is working on a file, note it in the shared file before making changes to the same file.\n"
+                f"- If you see a warning or blocker from a teammate, acknowledge it and adapt your work accordingly.\n"
+                f"- Before modifying any file, check `{SHARED_FILE}` to see if a teammate is already working on it. If so, coordinate by writing your intent first.\n"
+                f"- When you finish a task or find something important, update `{SHARED_FILE}` immediately — your teammates depend on it.\n"
             )
 
             base_prompt = proj.get("system_prompt", "")
