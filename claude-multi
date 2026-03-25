@@ -1,0 +1,977 @@
+#!/usr/bin/env python3
+"""claude-multi: Launch multiple Claude Code sessions in tmux panes."""
+
+import argparse
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+VERSION = "0.1.0"
+
+DEFAULT_CONFIG_DIR = Path.home() / ".config" / "claude-multi"
+DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.toml"
+SCRIPTS_DIR = DEFAULT_CONFIG_DIR / "scripts"
+TMUX_CONF_PATH = DEFAULT_CONFIG_DIR / "tmux.conf"
+
+DEFAULT_PALETTE = ["green", "cyan", "yellow", "magenta", "blue", "red"]
+DEFAULT_LAYOUT = "grid"
+DEFAULT_UPGRADE_INTERVAL = 30
+MAX_SESSIONS = 6
+
+# Allowed characters for paths interpolated into shell strings
+SAFE_PATH_RE = re.compile(r"^[a-zA-Z0-9/_. -]+$")
+
+# Built-in skill presets
+SKILL_PRESETS = {
+    # --- Project Management & Analysis ---
+    "pm": {
+        "label": "pm",
+        "prompt": "You are a senior IT project manager. You specialize in agile/scrum methodology, sprint planning, risk management, stakeholder communication, resource allocation, delivery timelines, and cross-team coordination.",
+    },
+    "ba": {
+        "label": "business-analyst",
+        "prompt": "You are a senior business analyst. You specialize in requirements gathering, user story writing, process modeling, stakeholder interviews, gap analysis, acceptance criteria definition, and translating business needs into technical specifications.",
+    },
+    "functional": {
+        "label": "functional",
+        "prompt": "You are a senior functional analyst. You specialize in functional specifications, use case modeling, workflow design, data flow diagrams, business rules documentation, and UAT scenario preparation.",
+    },
+    "technical": {
+        "label": "technical",
+        "prompt": "You are a senior technical analyst. You specialize in technical requirements, system integration analysis, API specification, data modeling, technical feasibility assessment, and solution architecture documentation.",
+    },
+    # --- Architecture & Design ---
+    "architect": {
+        "label": "architect",
+        "prompt": "You are a senior software architect. You specialize in system design, distributed systems, API design, scalability patterns, microservices, event-driven architecture, and technical decision-making.",
+    },
+    "db": {
+        "label": "db-architect",
+        "prompt": "You are a senior database architect. You specialize in data modeling, schema design, query optimization, indexing strategies, database migration, replication, and choosing between SQL/NoSQL solutions.",
+    },
+    # --- Development ---
+    "backend": {
+        "label": "backend",
+        "prompt": "You are a senior backend engineer. You specialize in API design, server-side architecture, database integration, authentication/authorization, caching strategies, message queues, and performance optimization.",
+    },
+    "frontend": {
+        "label": "frontend",
+        "prompt": "You are a senior frontend engineer. You specialize in React, TypeScript, CSS architecture, accessibility, performance optimization, responsive design, and state management.",
+    },
+    "fullstack": {
+        "label": "fullstack",
+        "prompt": "You are a senior fullstack engineer. You specialize in end-to-end feature development, frontend-backend integration, API design, database queries, deployment, and debugging across the entire stack.",
+    },
+    "rust": {
+        "label": "rust",
+        "prompt": "You are a senior Rust systems engineer. You specialize in performance optimization, unsafe code review, memory safety, concurrency patterns, and low-latency systems.",
+    },
+    "python": {
+        "label": "python",
+        "prompt": "You are a senior Python engineer. You specialize in Python best practices, async programming, type hints, testing frameworks, package management, and performance profiling.",
+    },
+    "mobile": {
+        "label": "mobile",
+        "prompt": "You are a senior mobile engineer. You specialize in iOS/Android development, React Native, cross-platform strategies, mobile UX patterns, offline-first design, and app store deployment.",
+    },
+    # --- Domain Experts ---
+    "quant": {
+        "label": "quant",
+        "prompt": "You are a senior quantitative finance and algorithmic trading expert. You specialize in market microstructure, statistical arbitrage, signal processing, backtesting, and execution optimization.",
+    },
+    "crypto": {
+        "label": "crypto",
+        "prompt": "You are a cryptography and blockchain expert. You specialize in zero-knowledge proofs, elliptic curve cryptography, consensus protocols, smart contracts, and protocol security.",
+    },
+    "data": {
+        "label": "data",
+        "prompt": "You are a senior data scientist and ML engineer. You specialize in statistical modeling, deep learning, data pipelines, feature engineering, and experiment design.",
+    },
+    "ai": {
+        "label": "ai",
+        "prompt": "You are a senior AI/ML engineer. You specialize in LLM integration, prompt engineering, RAG systems, fine-tuning, model evaluation, AI agent design, and production ML systems.",
+    },
+    # --- Testing & QA ---
+    "qa": {
+        "label": "qa",
+        "prompt": "You are a senior QA engineer. You specialize in test strategy, test plan creation, manual and exploratory testing, regression testing, bug triage, and quality metrics. You focus on finding edge cases and ensuring requirements coverage.",
+    },
+    "test-auto": {
+        "label": "test-auto",
+        "prompt": "You are a senior test automation engineer. You specialize in unit testing, integration testing, E2E testing, test frameworks (pytest, jest, playwright), CI test pipelines, code coverage, mocking strategies, and test-driven development.",
+    },
+    "perf": {
+        "label": "perf-test",
+        "prompt": "You are a senior performance testing engineer. You specialize in load testing, stress testing, benchmarking, profiling, bottleneck identification, latency analysis, and capacity planning.",
+    },
+    # --- Security ---
+    "security": {
+        "label": "security",
+        "prompt": "You are a senior application security engineer. You specialize in vulnerability assessment, secure code review, penetration testing methodology, threat modeling, OWASP best practices, and security architecture.",
+    },
+    # --- Infrastructure & Operations ---
+    "devops": {
+        "label": "devops",
+        "prompt": "You are a senior DevOps/SRE engineer. You specialize in CI/CD pipelines, container orchestration (Docker/K8s), infrastructure as code (Terraform), monitoring, alerting, and incident response.",
+    },
+    "cloud": {
+        "label": "cloud",
+        "prompt": "You are a senior cloud architect. You specialize in AWS/GCP/Azure services, cloud-native design, serverless architecture, cost optimization, networking, and multi-cloud strategies.",
+    },
+    "prod-support": {
+        "label": "prod-support",
+        "prompt": "You are a senior production support engineer. You specialize in incident management, root cause analysis, log analysis, monitoring and alerting, runbook creation, on-call procedures, and service level management.",
+    },
+    # --- Maintenance & Evolution ---
+    "maintenance": {
+        "label": "maintenance",
+        "prompt": "You are a senior software maintenance engineer. You specialize in legacy code analysis, refactoring strategies, technical debt assessment, dependency upgrades, backward compatibility, migration planning, and documentation improvement.",
+    },
+    "reviewer": {
+        "label": "code-review",
+        "prompt": "You are a senior code reviewer. You specialize in code quality assessment, identifying bugs and security issues, enforcing coding standards, suggesting improvements, evaluating test coverage, and mentoring through review feedback.",
+    },
+    "docs": {
+        "label": "docs",
+        "prompt": "You are a senior technical writer. You specialize in API documentation, architecture decision records, runbooks, user guides, README writing, code comments, and making complex systems understandable.",
+    },
+}
+
+DEFAULT_CONFIG_CONTENT = """\
+# claude-multi configuration
+# Layout: "grid", "horizontal", or "vertical"
+layout = "grid"
+
+# Color palette for auto-assignment (in order)
+palette = ["green", "cyan", "yellow", "magenta", "blue", "red"]
+
+# Upgrade check interval in minutes (0 to disable)
+upgrade_check_interval = 30
+
+# Projects: uncomment and edit to define your default projects
+# [[projects]]
+# path = "~/my-project"
+# color = "green"              # optional
+# skill = "quant"              # optional: preset skill (quant, rust, crypto, security, frontend, devops, data, architect)
+# model = "opus"               # optional: model override (opus, sonnet, haiku)
+# system_prompt = "custom..."  # optional: custom system prompt (overrides skill)
+# label = "my-role"            # optional: custom label for the header (overrides skill label)
+"""
+
+
+def load_config(config_path: str) -> dict:
+    """Load config from TOML file. Create default if missing."""
+    path = Path(config_path)
+
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(DEFAULT_CONFIG_CONTENT)
+        os.chmod(path, 0o600)
+
+    # Warn if permissions too open
+    if path.exists():
+        perms = stat.S_IMODE(path.stat().st_mode)
+        if perms & 0o077:
+            print(
+                f"WARNING: Config {path} has overly permissive permissions "
+                f"({oct(perms)}). Recommend: chmod 600 {path}",
+                file=sys.stderr,
+            )
+
+    with open(path, "rb") as f:
+        raw = tomllib.load(f)
+
+    config = {
+        "layout": raw.get("layout", DEFAULT_LAYOUT),
+        "palette": raw.get("palette", list(DEFAULT_PALETTE)),
+        "upgrade_check_interval": raw.get(
+            "upgrade_check_interval", DEFAULT_UPGRADE_INTERVAL
+        ),
+        "projects": raw.get("projects", []),
+    }
+
+    # Validate layout
+    if config["layout"] not in ("grid", "horizontal", "vertical"):
+        print(
+            f"WARNING: Invalid layout '{config['layout']}', using 'grid'",
+            file=sys.stderr,
+        )
+        config["layout"] = "grid"
+
+    return config
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse CLI arguments."""
+    parser = argparse.ArgumentParser(
+        prog="claude-multi",
+        description="Launch multiple Claude Code sessions in tmux panes.",
+    )
+    parser.add_argument(
+        "projects",
+        nargs="*",
+        default=[],
+        help="Project directories to open (overrides config file)",
+    )
+    parser.add_argument(
+        "--layout",
+        choices=["grid", "horizontal", "vertical"],
+        default=None,
+        help="Pane layout (default: from config or 'grid')",
+    )
+    parser.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG_PATH),
+        help="Config file path",
+    )
+    parser.add_argument(
+        "--session",
+        default="claude-multi",
+        help="Tmux session name (default: claude-multi)",
+    )
+    parser.add_argument(
+        "--detach",
+        action="store_true",
+        help="Create session in background without attaching",
+    )
+    parser.add_argument(
+        "--keys",
+        action="store_true",
+        help="Show keybinding reference and exit",
+    )
+    parser.add_argument(
+        "--skills",
+        action="store_true",
+        help="Show available skill presets and exit",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"claude-multi {VERSION}",
+    )
+    return parser.parse_args(argv)
+
+
+def sanitize_name(name: str) -> str:
+    """Sanitize string for use as tmux pane/session name."""
+    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "", name)
+    if not sanitized:
+        sanitized = "unnamed"
+    return sanitized[:256]
+
+
+def resolve_skill(project_cfg: dict) -> dict:
+    """Resolve skill/model/prompt settings from a project config entry.
+
+    Priority: system_prompt > skill preset > nothing.
+    Returns dict with keys: label, system_prompt, model (all optional).
+    """
+    result = {}
+
+    # Model override
+    model = project_cfg.get("model")
+    if model:
+        result["model"] = model
+
+    # Effort override
+    effort = project_cfg.get("effort")
+    if effort:
+        result["effort"] = effort
+
+    # System prompt — explicit takes priority over skill preset
+    system_prompt = project_cfg.get("system_prompt")
+    skill_name = project_cfg.get("skill")
+
+    if system_prompt:
+        result["system_prompt"] = system_prompt
+        result["label"] = project_cfg.get("label", "custom")
+    elif skill_name:
+        preset = SKILL_PRESETS.get(skill_name)
+        if preset:
+            result["system_prompt"] = preset["prompt"]
+            result["label"] = project_cfg.get("label", preset["label"])
+        else:
+            valid = ", ".join(sorted(SKILL_PRESETS.keys()))
+            print(
+                f"WARNING: Unknown skill '{skill_name}'. "
+                f"Available: {valid}",
+                file=sys.stderr,
+            )
+
+    # Explicit label always wins
+    if "label" in project_cfg:
+        result["label"] = project_cfg["label"]
+
+    return result
+
+
+def validate_projects(
+    paths: list[str],
+    palette: list[str],
+    config_projects: list[dict] | None = None,
+) -> list[dict]:
+    """Validate project paths, deduplicate, assign colors and skills."""
+    config_projects = config_projects or []
+
+    # Build lookup maps from config (keyed by resolved path)
+    config_by_path: dict[str, list[dict]] = {}
+    for cp in config_projects:
+        resolved = str(Path(cp["path"]).expanduser().resolve())
+        config_by_path.setdefault(resolved, []).append(cp)
+
+    # When loading from config (no CLI paths), use config_projects directly
+    # When loading from CLI paths, use path-based lookup
+    seen_keys: set[str] = set()
+    projects = []
+
+    items_to_process: list[dict] = []
+    if paths:
+        # CLI paths — simple mode, one pane per path
+        for raw_path in paths:
+            items_to_process.append({"path": raw_path})
+    else:
+        # Config mode — use config entries directly (allows same path with different skills)
+        items_to_process = list(config_projects)
+
+    for i, item in enumerate(items_to_process):
+        raw_path = item.get("path", "")
+        if len(raw_path) > 4096:
+            print(f"WARNING: Path too long, skipping: {raw_path[:80]}...", file=sys.stderr)
+            continue
+
+        path = Path(raw_path).expanduser().resolve()
+
+        if not path.exists():
+            print(f"WARNING: Path does not exist, skipping: {path}", file=sys.stderr)
+            continue
+        if not path.is_dir():
+            print(f"WARNING: Not a directory, skipping: {path}", file=sys.stderr)
+            continue
+
+        path_str = str(path)
+
+        # Dedup key: path + skill/label combo (same path with different skills is OK)
+        skill_info = resolve_skill(item)
+        dedup_key = f"{path_str}:{skill_info.get('label', '')}:{skill_info.get('model', '')}"
+        if dedup_key in seen_keys:
+            print(f"WARNING: Duplicate path+skill, skipping: {path}", file=sys.stderr)
+            continue
+        seen_keys.add(dedup_key)
+
+        # Color from config or palette
+        color = item.get("color", palette[len(projects) % len(palette)])
+        name = sanitize_name(path.name)
+
+        # Build display name with skill label
+        label = skill_info.get("label")
+        display_name = f"{name}/{label}" if label else name
+
+        proj = {
+            "path": path,
+            "name": display_name,
+            "color": color,
+        }
+
+        # Add optional skill settings
+        if "system_prompt" in skill_info:
+            proj["system_prompt"] = skill_info["system_prompt"]
+        if "model" in skill_info:
+            proj["model"] = skill_info["model"]
+        if "effort" in skill_info:
+            proj["effort"] = skill_info["effort"]
+
+        projects.append(proj)
+
+        if len(projects) >= MAX_SESSIONS:
+            if i < len(paths) - 1:
+                print(
+                    f"WARNING: Max {MAX_SESSIONS} sessions. Ignoring remaining projects.",
+                    file=sys.stderr,
+                )
+            break
+
+    return projects
+
+
+def get_version_output(cmd: list[str], timeout: int = 5) -> str:
+    """Run a command and return stdout, or empty string on failure."""
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout
+        )
+        return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return ""
+
+
+def check_dependencies() -> dict:
+    """Check that tmux and claude are installed. Returns version info. Exits on failure."""
+    info = {}
+
+    # Check tmux
+    if not shutil.which("tmux"):
+        print(
+            "ERROR: tmux is not installed.\n"
+            "  macOS: brew install tmux\n"
+            "  Ubuntu/Debian: sudo apt install tmux\n"
+            "  Fedora: sudo dnf install tmux",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    tmux_ver = get_version_output(["tmux", "-V"])
+    info["tmux_version"] = tmux_ver
+
+    # Check tmux version >= 2.3
+    match = re.search(r"(\d+)\.(\d+)", tmux_ver)
+    if match:
+        major, minor = int(match.group(1)), int(match.group(2))
+        if (major, minor) < (2, 3):
+            print(
+                f"ERROR: tmux {tmux_ver} is too old. Need tmux 2.3+ "
+                "for pane-border-format support.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    # Check claude
+    if not shutil.which("claude"):
+        print(
+            "ERROR: Claude Code CLI is not installed.\n"
+            "  Install: npm install -g @anthropic-ai/claude-code",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    claude_ver_raw = get_version_output(["claude", "--version"])
+    # Extract just the semver (e.g. "2.1.83" from "2.1.83 (Claude Code)")
+    ver_match = re.search(r"(\d+\.\d+\.\d+)", claude_ver_raw)
+    info["claude_version"] = ver_match.group(1) if ver_match else claude_ver_raw
+
+    return info
+
+
+def validate_safe_path(path: Path) -> None:
+    """Validate a path is safe for interpolation into shell strings."""
+    path_str = str(path)
+    if not SAFE_PATH_RE.match(path_str):
+        raise ValueError(
+            f"Path contains unsafe characters for shell interpolation: {path_str}"
+        )
+
+
+def generate_tmux_conf(
+    conf_path: Path,
+    scripts_dir: Path,
+    session_name: str,
+    upgrade_check_interval: int,
+) -> None:
+    """Generate dedicated tmux.conf for claude-multi."""
+    validate_safe_path(scripts_dir)
+    safe_session = sanitize_name(session_name)
+
+    conf_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Build upgrade timer block if enabled
+    upgrade_timer = ""
+    if upgrade_check_interval > 0:
+        interval_sec = upgrade_check_interval * 60
+        upgrade_timer = f"""
+# Upgrade check timer (every {upgrade_check_interval} minutes)
+# Self-rescheduling: check-upgrade.sh reschedules itself at the end
+set-hook -g after-new-session "run-shell -b '{scripts_dir}/check-upgrade.sh {safe_session} {interval_sec}'"
+"""
+
+    content = f"""\
+# claude-multi tmux configuration (auto-generated)
+# Do not edit — regenerated on each launch
+
+# Enable pane border status at top
+set-option -wg pane-border-status top
+
+# Active pane: bright green arrow + bold info. Inactive: dim grey.
+set-option -wg pane-border-format "#{{?pane_active,#[fg=colour46 bold] ▶ #{{@cm_info}} ,#[fg=colour240]   #{{@cm_info}} }}"
+
+# Active border: bright green. Inactive: dark grey.
+set-option -g pane-active-border-style "fg=colour46,bold"
+set-option -g pane-border-style "fg=colour240"
+
+# Mouse support (click to switch panes)
+set-option -g mouse on
+
+# Status bar — help shortcuts
+set-option -g status on
+set-option -g status-position bottom
+set-option -g status-style "bg=colour233,fg=colour245"
+set-option -g status-left "#[bg=colour22,fg=colour46,bold] claude-multi #[default] "
+set-option -g status-left-length 20
+set-option -g status-right " #[fg=colour250]^B+Arrows#[fg=colour240]:navigate #[fg=colour250]^B+r#[fg=colour240]:restart #[fg=colour250]^B+R#[fg=colour240]:all #[fg=colour250]^B+U#[fg=colour240]:upgrade #[fg=colour250]^B+z#[fg=colour240]:zoom #[fg=colour250]^B+x#[fg=colour240]:close #[fg=colour250]^B+d#[fg=colour240]:detach "
+set-option -g status-right-length 150
+set-option -g window-status-format ""
+set-option -g window-status-current-format ""
+{upgrade_timer}
+# Keybindings
+bind-key r run-shell "{scripts_dir}/restart.sh '#{{pane_id}}' {safe_session}"
+bind-key R run-shell "{scripts_dir}/restart-all.sh {safe_session}"
+bind-key U split-window -v "{scripts_dir}/upgrade.sh {safe_session}"
+"""
+    conf_path.write_text(content)
+
+
+def build_layout_commands(
+    layout: str, projects: list[dict], session_name: str
+) -> list[list[str]]:
+    """Build tmux commands to create panes in the requested layout.
+
+    Uses split-window for each additional pane, then applies a tmux
+    built-in layout to even them out. This avoids manual pane index
+    tracking which breaks when tmux renumbers panes after splits.
+    """
+    n = len(projects)
+    if n <= 1:
+        return []
+
+    cmds: list[list[str]] = []
+    target = f"{session_name}:0"
+
+    # Create n-1 additional panes (first pane exists from new-session)
+    for _ in range(1, n):
+        cmds.append([
+            "tmux", "split-window", "-t", target, "-d",
+        ])
+        # Apply layout after each split to keep panes usable
+        if layout == "grid":
+            cmds.append(["tmux", "select-layout", "-t", target, "tiled"])
+        elif layout == "horizontal":
+            cmds.append(["tmux", "select-layout", "-t", target, "even-horizontal"])
+        elif layout == "vertical":
+            cmds.append(["tmux", "select-layout", "-t", target, "even-vertical"])
+
+    return cmds
+
+
+def write_script(path: Path, content: str) -> None:
+    """Write a shell script with secure permissions (0o700)."""
+    path.write_text(content)
+    os.chmod(path, 0o700)
+
+
+def generate_scripts(scripts_dir: Path) -> None:
+    """Generate helper shell scripts for tmux keybindings."""
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+
+    # pane-wrapper.sh — launched in each pane via send-keys, handles restart loop
+    write_script(scripts_dir / "pane-wrapper.sh", """\
+#!/bin/bash
+# Pane wrapper for claude-multi
+# Args: $1=project_path $2=project_name $3=color
+# Optional env: CM_MODEL, CM_SYSTEM_PROMPT, CM_EFFORT
+set -euo pipefail
+
+PROJECT_PATH="$1"
+PROJECT_NAME="$2"
+COLOR="$3"
+PANE_ID="${TMUX_PANE:-}"
+MODEL="${CM_MODEL:-}"
+SYSTEM_PROMPT="${CM_SYSTEM_PROMPT:-}"
+EFFORT="${CM_EFFORT:-}"
+
+cd "$PROJECT_PATH"
+
+get_claude_version() {
+    claude --version 2>/dev/null | head -1 | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' || echo "unknown"
+}
+
+# Build extra claude flags from env
+build_claude_args() {
+    EXTRA_ARGS=""
+    if [ -n "$MODEL" ]; then
+        EXTRA_ARGS="$EXTRA_ARGS --model $MODEL"
+    fi
+    if [ -n "$EFFORT" ]; then
+        EXTRA_ARGS="$EXTRA_ARGS --effort $EFFORT"
+    fi
+    if [ -n "$SYSTEM_PROMPT" ]; then
+        EXTRA_ARGS="$EXTRA_ARGS --system-prompt \\"$SYSTEM_PROMPT\\""
+    fi
+    echo "$EXTRA_ARGS"
+}
+
+update_title() {
+    local status="$1"
+    local ver
+    ver=$(get_claude_version)
+    local model_tag=""
+    if [ -n "$MODEL" ] && [ -n "$EFFORT" ]; then
+        model_tag=" ($MODEL/$EFFORT)"
+    elif [ -n "$MODEL" ]; then
+        model_tag=" ($MODEL)"
+    elif [ -n "$EFFORT" ]; then
+        model_tag=" ($EFFORT)"
+    fi
+    if [ -n "$PANE_ID" ]; then
+        tmux set-option -p -t "$PANE_ID" @cm_info "[$PROJECT_NAME] claude $ver$model_tag $status" 2>/dev/null || true
+    fi
+}
+
+FIRST_RUN=1
+while true; do
+    EXTRA=$(build_claude_args)
+    if [ "$FIRST_RUN" -eq 1 ]; then
+        update_title "● running"
+        eval claude --name \\"$PROJECT_NAME\\" $EXTRA || true
+        FIRST_RUN=0
+    else
+        update_title "● restarting..."
+        sleep 1
+        update_title "● running"
+        eval claude --continue --name \\"$PROJECT_NAME\\" $EXTRA || eval claude --name \\"$PROJECT_NAME\\" $EXTRA || true
+    fi
+
+    update_title "● stopped"
+    echo ""
+    echo "Claude session ended. Press Enter to restart or Ctrl+C to exit pane."
+    read -r || break
+done
+""")
+
+    # restart.sh — restart claude in a specific pane using SIGTERM
+    write_script(scripts_dir / "restart.sh", """\
+#!/bin/bash
+# Restart claude in a specific pane via SIGTERM
+# Args: $1=pane_id $2=session_name
+set -uo pipefail
+PANE_ID="$1"
+SESSION="$2"
+
+# Find the claude process running in this pane
+PANE_PID=$(tmux display-message -t "$PANE_ID" -p '#{pane_pid}' 2>/dev/null || echo "")
+if [ -z "$PANE_PID" ]; then
+    exit 0
+fi
+
+# Find claude child process of the pane shell
+CLAUDE_PID=$(pgrep -P "$PANE_PID" -f "claude" 2>/dev/null | head -1 || echo "")
+if [ -z "$CLAUDE_PID" ]; then
+    # No claude running, just send Enter to trigger restart in wrapper
+    tmux send-keys -t "$PANE_ID" Enter
+    exit 0
+fi
+
+# Send SIGTERM for graceful shutdown
+kill -TERM "$CLAUDE_PID" 2>/dev/null || true
+
+# Wait up to 5 seconds for graceful exit
+for i in $(seq 1 10); do
+    if ! kill -0 "$CLAUDE_PID" 2>/dev/null; then
+        break
+    fi
+    sleep 0.5
+done
+
+# SIGKILL if still alive
+if kill -0 "$CLAUDE_PID" 2>/dev/null; then
+    kill -KILL "$CLAUDE_PID" 2>/dev/null || true
+fi
+
+# Wait a moment then send Enter to trigger restart in the wrapper loop
+sleep 1
+tmux send-keys -t "$PANE_ID" Enter
+""")
+
+    # restart-all.sh — restart all panes
+    write_script(scripts_dir / "restart-all.sh", """\
+#!/bin/bash
+# Restart claude in all panes
+# Args: $1=session_name
+set -uo pipefail
+SESSION="$1"
+SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+PANES=$(tmux list-panes -t "$SESSION" -F '#{pane_id}' 2>/dev/null || echo "")
+for PANE in $PANES; do
+    bash "$SCRIPTS_DIR/restart.sh" "$PANE" "$SESSION" &
+done
+wait
+""")
+
+    # upgrade.sh — confirm, upgrade claude, then restart all
+    write_script(scripts_dir / "upgrade.sh", """\
+#!/bin/bash
+# Upgrade Claude Code and restart all panes
+# Args: $1=session_name
+set -uo pipefail
+SESSION="$1"
+SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo "=== Claude Code Upgrade ==="
+echo ""
+echo "This will run: npm update -g @anthropic-ai/claude-code"
+echo "This affects Claude Code globally on this system."
+echo ""
+printf "Proceed? [y/N] "
+read -r CONFIRM
+
+if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
+    echo "Upgrade cancelled."
+    sleep 2
+    exit 0
+fi
+
+echo ""
+echo "Upgrading..."
+if npm update -g @anthropic-ai/claude-code; then
+    echo ""
+    echo "Upgrade complete. Restarting all sessions..."
+    sleep 1
+    bash "$SCRIPTS_DIR/restart-all.sh" "$SESSION"
+else
+    echo ""
+    echo "ERROR: Upgrade failed. Check permissions (you may need sudo)."
+    echo "Press Enter to close."
+    read -r
+    exit 1
+fi
+
+sleep 2
+""")
+
+    # check-upgrade.sh — silent upgrade check, self-rescheduling timer
+    write_script(scripts_dir / "check-upgrade.sh", """\
+#!/bin/bash
+# Check for Claude Code upgrades (self-rescheduling tmux timer)
+# Args: $1=session_name $2=interval_seconds
+set -uo pipefail
+SESSION="$1"
+INTERVAL="${2:-1800}"
+
+# Get installed version
+LOCAL_VER=$(claude --version 2>/dev/null | head -1 | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' || echo "")
+if [ -n "$LOCAL_VER" ]; then
+    # Check npm for latest (10s timeout)
+    REMOTE_VER=$(timeout 10 npm view @anthropic-ai/claude-code version 2>/dev/null || echo "")
+
+    if [ -n "$REMOTE_VER" ] && [ "$LOCAL_VER" != "$REMOTE_VER" ]; then
+        # Update all pane @cm_info to show upgrade available
+        PANES=$(tmux list-panes -t "$SESSION" -F '#{pane_id}' 2>/dev/null || echo "")
+        for PANE_ID in $PANES; do
+            TITLE=$(tmux show-options -p -t "$PANE_ID" -v @cm_info 2>/dev/null || echo "")
+            if [ -n "$TITLE" ] && ! echo "$TITLE" | grep -q "⬆"; then
+                NEW_TITLE=$(echo "$TITLE" | sed "s/claude $LOCAL_VER/claude $LOCAL_VER ⬆ $REMOTE_VER/")
+                tmux set-option -p -t "$PANE_ID" @cm_info "$NEW_TITLE" 2>/dev/null || true
+            fi
+        done
+    fi
+fi
+
+# Reschedule: sleep then run again
+SELF="$(cd "$(dirname "$0")" && pwd)/check-upgrade.sh"
+tmux run-shell -b "sleep $INTERVAL && bash '$SELF' '$SESSION' '$INTERVAL'" 2>/dev/null || true
+""")
+
+
+def tmux_session_exists(session_name: str) -> bool:
+    """Check if a tmux session with the given name exists."""
+    result = subprocess.run(
+        ["tmux", "has-session", "-t", session_name],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def run_tmux(args: list[str]) -> subprocess.CompletedProcess:
+    """Run a tmux command safely via argument list."""
+    return subprocess.run(
+        ["tmux"] + args,
+        capture_output=True,
+        text=True,
+    )
+
+
+def create_session(
+    projects: list[dict],
+    layout: str,
+    session_name: str,
+    detach: bool,
+    dep_info: dict,
+    upgrade_check_interval: int,
+) -> None:
+    """Create the tmux session with all panes."""
+    claude_version = dep_info.get("claude_version", "unknown")
+
+    # Generate config and scripts
+    generate_tmux_conf(
+        TMUX_CONF_PATH, SCRIPTS_DIR, session_name, upgrade_check_interval
+    )
+    generate_scripts(SCRIPTS_DIR)
+
+    # Create session with a default shell (not the wrapper directly)
+    # All panes start as shells; we send-keys to each for consistency
+    first = projects[0]
+    subprocess.run(
+        [
+            "tmux", "new-session",
+            "-d",
+            "-s", session_name,
+            "-f", str(TMUX_CONF_PATH),
+            "-c", str(first["path"]),
+        ],
+        check=True,
+    )
+
+    # Source the tmux config explicitly (the -f flag on new-session is unreliable)
+    run_tmux(["source-file", str(TMUX_CONF_PATH)])
+
+    # Create remaining panes via layout
+    layout_cmds = build_layout_commands(layout, projects, session_name)
+    for cmd in layout_cmds:
+        subprocess.run(cmd, check=False)
+
+    # Launch wrapper in each pane via send-keys (consistent for all panes)
+    for i, proj in enumerate(projects):
+        title = f"[{proj['name']}] claude {claude_version} ● running"
+
+        # Set pane info via per-pane user option (not pane_title, which Claude overwrites)
+        run_tmux([
+            "set-option", "-p", "-t", f"{session_name}:0.{i}",
+            "@cm_info", title,
+        ])
+
+        # Store project color for use in pane-border-format
+        run_tmux([
+            "set-option", "-p", "-t", f"{session_name}:0.{i}",
+            "@cm_color", proj["color"],
+        ])
+
+        # Build env vars for skill/model/effort
+        env_prefix = ""
+        model = proj.get("model", "")
+        effort = proj.get("effort", "")
+        system_prompt = proj.get("system_prompt", "")
+        if model:
+            env_prefix += f"CM_MODEL='{model}' "
+        if effort:
+            env_prefix += f"CM_EFFORT='{effort}' "
+        if system_prompt:
+            # Escape single quotes in the prompt
+            safe_prompt = system_prompt.replace("'", "'\\''")
+            env_prefix += f"CM_SYSTEM_PROMPT='{safe_prompt}' "
+
+        # Launch wrapper — clear first so the command line is not visible
+        wrapper = str(SCRIPTS_DIR / "pane-wrapper.sh")
+        proj_path = str(proj["path"])
+        proj_name = proj["name"]
+        proj_color = proj["color"]
+        run_tmux([
+            "send-keys", "-t", f"{session_name}:0.{i}",
+            f"clear && {env_prefix}bash '{wrapper}' '{proj_path}' '{proj_name}' '{proj_color}'",
+            "Enter",
+        ])
+
+    # Attach or stay detached
+    if not detach:
+        os.execvp("tmux", ["tmux", "attach-session", "-t", session_name])
+    else:
+        print(f"Session '{session_name}' created in background.")
+        print(f"Attach with: tmux attach -t {session_name}")
+
+
+KEYS_HELP = """\
+claude-multi keybindings (all use Ctrl+B prefix):
+
+  Navigation
+    Ctrl+B ←→↑↓     Switch between panes
+    Ctrl+B z         Zoom (fullscreen) current pane, press again to unzoom
+    Ctrl+B q         Show pane numbers, press number to jump
+    mouse click      Click a pane to switch to it
+
+  Session Control
+    Ctrl+B r         Restart current pane (claude --continue)
+    Ctrl+B R         Restart ALL panes
+    Ctrl+B U         Upgrade Claude Code (with confirmation)
+    Ctrl+B d         Detach (go back to terminal, session keeps running)
+
+  Closing
+    Ctrl+B x         Close current pane (with confirmation)
+    exit             Type 'exit' in Claude, then Ctrl+C in wrapper
+
+  Re-attach after detach
+    tmux attach -t claude-multi
+    claude-multi (auto-attaches if session exists)
+
+  Kill entire session from terminal
+    tmux kill-session -t claude-multi
+"""
+
+
+def main() -> None:
+    """Main entry point."""
+    args = parse_args()
+
+    if args.keys:
+        print(KEYS_HELP)
+        return
+
+    if args.skills:
+        print("Available skill presets:\n")
+        for name, info in sorted(SKILL_PRESETS.items()):
+            print(f"  {name:12s}  {info['prompt'][:80]}...")
+        print(f"\nUsage in config.toml:")
+        print(f'  [[projects]]')
+        print(f'  path = "~/my-project"')
+        print(f'  skill = "quant"')
+        print(f'  model = "opus"  # optional: opus, sonnet, haiku')
+        return
+
+    config = load_config(args.config)
+    dep_info = check_dependencies()
+
+    layout = args.layout or config["layout"]
+
+    if args.projects:
+        project_paths = args.projects
+    else:
+        project_paths = []
+
+    if not project_paths and not config["projects"]:
+        print(
+            "ERROR: No projects specified. "
+            "Pass project paths as arguments or define them in config:\n"
+            f"  {args.config}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    projects = validate_projects(
+        project_paths,
+        palette=config["palette"],
+        config_projects=config["projects"],
+    )
+
+    if not projects:
+        print("ERROR: No valid project paths found.", file=sys.stderr)
+        sys.exit(1)
+
+    session_name = sanitize_name(args.session)
+
+    if tmux_session_exists(session_name):
+        print(f"Session '{session_name}' already exists. Attaching...")
+        if not args.detach:
+            os.execvp("tmux", ["tmux", "attach-session", "-t", session_name])
+        else:
+            print(f"Attach with: tmux attach -t {session_name}")
+        return
+
+    create_session(
+        projects, layout, session_name, args.detach, dep_info,
+        config["upgrade_check_interval"],
+    )
+
+
+if __name__ == "__main__":
+    main()
