@@ -228,18 +228,18 @@ def test_generate_tmux_conf_no_upgrade_timer():
 
 def test_build_layout_commands_grid():
     cm = load_claude_multi()
+    # 4 panes, 2 projects — should create 2-column layout
     projects = [
-        {"name": "p1", "path": Path("/a"), "color": "green"},
-        {"name": "p2", "path": Path("/b"), "color": "cyan"},
-        {"name": "p3", "path": Path("/c"), "color": "yellow"},
-        {"name": "p4", "path": Path("/d"), "color": "magenta"},
+        {"name": "a/p1", "path": Path("/a"), "color": "green"},
+        {"name": "a/p2", "path": Path("/a"), "color": "cyan"},
+        {"name": "b/p3", "path": Path("/b"), "color": "yellow"},
+        {"name": "b/p4", "path": Path("/b"), "color": "magenta"},
     ]
     cmds = cm.build_layout_commands("grid", projects, "claude-multi")
     split_cmds = [c for c in cmds if "split-window" in str(c)]
-    assert len(split_cmds) == 3
-    # Must use tiled layout
-    tiled_cmds = [c for c in cmds if "tiled" in str(c)]
-    assert len(tiled_cmds) >= 1
+    assert len(split_cmds) == 3  # 1 horizontal + 1 left vert + 1 right vert
+    # First split should be horizontal (creating left/right columns)
+    assert "-h" in split_cmds[0]
 
 
 def test_build_layout_commands_single():

@@ -605,9 +605,8 @@ def build_layout_commands(
 ) -> list[list[str]]:
     """Build tmux commands to create panes in the requested layout.
 
-    Uses split-window for each additional pane, then applies a tmux
-    built-in layout to even them out. This avoids manual pane index
-    tracking which breaks when tmux renumbers panes after splits.
+    Grid layout groups by project: left column = first project, right column = second.
+    Projects should be sorted by path before calling this function.
     """
     n = len(projects)
     if n <= 1:
@@ -616,12 +615,54 @@ def build_layout_commands(
     cmds: list[list[str]] = []
     target = f"{session_name}:0"
 
-    # Create n-1 additional panes (first pane exists from new-session)
+    if layout == "grid" and n >= 4:
+        # 2-column grid: group by project (left col / right col)
+        # Count how many unique projects and split into left/right
+        unique_paths = []
+        for p in projects:
+            ps = str(p["path"])
+            if ps not in unique_paths:
+                unique_paths.append(ps)
+
+        if len(unique_paths) >= 2:
+            # Split: left half = first project(s), right half = rest
+            mid = n // 2
+            left_count = mid
+            right_count = n - mid
+
+            # First pane (index 0) already exists — it's top-left
+            # Create right column with a horizontal split
+            cmds.append([
+                "tmux", "split-window", "-t", f"{target}.0", "-h", "-d",
+            ])
+            # Now pane 0 = left, pane 1 = right
+
+            # Split left column vertically for additional left panes
+            for i in range(1, left_count):
+                cmds.append([
+                    "tmux", "split-window", "-t", f"{target}.0", "-v", "-d",
+                ])
+
+            # Split right column vertically for additional right panes
+            # Right column starts at pane index = left_count
+            for i in range(1, right_count):
+                cmds.append([
+                    "tmux", "split-window", "-t", f"{target}.{left_count}", "-v", "-d",
+                ])
+
+            return cmds
+
+        # Fallback: single project with 4+ panes — use tiled
+        for _ in range(1, n):
+            cmds.append(["tmux", "split-window", "-t", target, "-d"])
+            cmds.append(["tmux", "select-layout", "-t", target, "tiled"])
+        return cmds
+
+    # For 2-3 panes grid or other layouts
     for _ in range(1, n):
         cmds.append([
             "tmux", "split-window", "-t", target, "-d",
         ])
-        # Apply layout after each split to keep panes usable
         if layout == "grid":
             cmds.append(["tmux", "select-layout", "-t", target, "tiled"])
         elif layout == "horizontal":
@@ -1043,6 +1084,10 @@ def main() -> None:
 
     # Add team collaboration context for multi-pane projects
     projects = enrich_with_team_context(projects)
+
+    # Sort by project path so same-project panes are grouped together
+    # This ensures left column = project A, right column = project B in grid layout
+    projects.sort(key=lambda p: str(p["path"]))
 
     session_name = sanitize_name(args.session)
 
