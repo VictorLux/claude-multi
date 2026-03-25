@@ -4,6 +4,8 @@ Run up to 6 [Claude Code](https://claude.ai/claude-code) sessions side-by-side i
 
 Each pane gets a persistent header showing project name, Claude version, model, effort level, and session status. Assign different **skill presets** (quant, security, devops, etc.) and **model/effort combos** per pane.
 
+![claude-multi grid layout](docs/images/grid-layout.png)
+
 > **DISCLAIMER:** This is an independent, community-built tool. It is **not** an official Anthropic product. It is not affiliated with, endorsed by, or supported by Anthropic. Claude Code is a trademark of Anthropic. Use at your own risk. This tool launches Claude Code sessions on your behalf and may incur API usage costs depending on your plan. The authors are not responsible for any costs, damages, or issues arising from use of this tool.
 
 ## Features
