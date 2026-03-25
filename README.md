@@ -6,6 +6,10 @@ Each pane gets a persistent header showing project name, Claude version, model, 
 
 ![claude-multi grid layout](docs/images/grid-layout.png)
 
+### Demo — 6 panes with zoom in/out
+
+https://github.com/VictorLux/claude-multi/raw/main/docs/images/claude-multi-demo.mov
+
 > **DISCLAIMER:** This is an independent, community-built tool. It is **not** an official Anthropic product. It is not affiliated with, endorsed by, or supported by Anthropic. Claude Code is a trademark of Anthropic. Use at your own risk. This tool launches Claude Code sessions on your behalf and may incur API usage costs depending on your plan. The authors are not responsible for any costs, damages, or issues arising from use of this tool.
 
 ## Features
@@ -169,6 +173,10 @@ All keybindings use the tmux prefix (default: `Ctrl+B`):
 # Show keybinding reference anytime
 claude-multi --keys
 ```
+
+### Zoom in / Zoom out
+
+Need to focus on a single pane? Press `Ctrl+B` then `z` — the active pane goes **fullscreen**. Press `Ctrl+B` then `z` again to return to the grid. This is great when you need to read long output or have a detailed conversation with one expert.
 
 ## Skill Presets
 
