@@ -11,6 +11,7 @@ Each pane gets a persistent header showing project name, Claude version, model, 
 ## Features
 
 - **Multi-session**: Up to 6 Claude Code sessions in one terminal
+- **Team collaboration**: Panes sharing the same project auto-coordinate via a shared notes file
 - **Skill presets**: 26 built-in expert personas (quant, security, devops, architect, etc.)
 - **Per-pane model**: Assign different Claude models (opus, sonnet, haiku) per pane
 - **Per-pane effort**: Set effort level (low, medium, high, max) per pane
@@ -181,6 +182,30 @@ system_prompt = "You are a Solana blockchain expert specializing in program deve
 label = "solana"
 model = "opus"
 ```
+
+## Team Collaboration
+
+When multiple panes share the same project, they automatically coordinate:
+
+1. **Shared notes file**: A `.claude-multi-shared.md` file is created in the project root. All panes read and write to it.
+2. **Team awareness**: Each session's system prompt includes who its teammates are and their roles.
+3. **Coordination rules**: Sessions are instructed to check the shared file before major decisions, write findings, and avoid conflicting edits.
+
+Example: if your soltrader project has a `quant` pane and a `security` pane, the security expert will see the quant's findings and vice versa.
+
+```
+# .claude-multi-shared.md (auto-created)
+
+## Active sessions
+- soltrader/quant (model: opus, effort: high)
+- soltrader/security (model: sonnet, effort: medium)
+
+## Shared Notes
+[soltrader/quant] Found potential race condition in order execution...
+[soltrader/security] Reviewing the race condition — confirmed, also affects stop-loss logic...
+```
+
+Add `.claude-multi-shared.md` to your project's `.gitignore` — it's session-specific, not for version control.
 
 ## CLI Reference
 

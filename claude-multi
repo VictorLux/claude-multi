@@ -398,6 +398,83 @@ def validate_projects(
     return projects
 
 
+SHARED_FILE = ".claude-multi-shared.md"
+
+SHARED_FILE_TEMPLATE = """\
+# claude-multi shared notes
+
+This file is shared between all Claude Code sessions working on this project.
+Use it to coordinate, share findings, and pass context between sessions.
+
+## Active sessions
+{sessions}
+
+## Shared Notes
+<!-- Write your findings, decisions, and context below -->
+<!-- Other sessions in this project will read this file -->
+
+"""
+
+
+def enrich_with_team_context(projects: list[dict]) -> list[dict]:
+    """Add team awareness to each project's system prompt.
+
+    Groups projects by path, then for each project with teammates,
+    appends collaboration instructions to the system prompt.
+    Creates/updates the shared notes file in each project directory.
+    """
+    # Group by resolved path
+    by_path: dict[str, list[dict]] = {}
+    for proj in projects:
+        key = str(proj["path"])
+        by_path.setdefault(key, []).append(proj)
+
+    for path_str, teammates in by_path.items():
+        if len(teammates) < 2:
+            continue
+
+        path = Path(path_str)
+
+        # Build team roster for the shared file
+        session_lines = ""
+        for t in teammates:
+            model = t.get("model", "default")
+            effort = t.get("effort", "default")
+            session_lines += f"- **{t['name']}** (model: {model}, effort: {effort})\n"
+
+        # Create/update shared file
+        shared_path = path / SHARED_FILE
+        if not shared_path.exists():
+            shared_path.write_text(
+                SHARED_FILE_TEMPLATE.format(sessions=session_lines)
+            )
+
+        # Add team context to each teammate's system prompt
+        for proj in teammates:
+            team_desc = []
+            for t in teammates:
+                if t is not proj:
+                    team_desc.append(f"  - {t['name']} ({t.get('model', 'default')})")
+
+            collab_prompt = (
+                f"\n\n## Team Collaboration\n"
+                f"You are part of a team of Claude sessions working on this project simultaneously.\n"
+                f"Your teammates:\n" + "\n".join(team_desc) + "\n\n"
+                f"Coordination rules:\n"
+                f"- Read `{SHARED_FILE}` at the start of your work and before major decisions.\n"
+                f"- Write your key findings, decisions, and warnings to `{SHARED_FILE}`.\n"
+                f"- Prefix your entries with your role name [{proj['name']}].\n"
+                f"- Do NOT edit or delete other sessions' entries.\n"
+                f"- If you see a warning or blocker from a teammate, acknowledge it.\n"
+                f"- Coordinate on shared files — if a teammate is working on a file, note it in the shared file before making changes to the same file.\n"
+            )
+
+            base_prompt = proj.get("system_prompt", "")
+            proj["system_prompt"] = base_prompt + collab_prompt
+
+    return projects
+
+
 def get_version_output(cmd: list[str], timeout: int = 5) -> str:
     """Run a command and return stdout, or empty string on failure."""
     try:
@@ -956,6 +1033,9 @@ def main() -> None:
     if not projects:
         print("ERROR: No valid project paths found.", file=sys.stderr)
         sys.exit(1)
+
+    # Add team collaboration context for multi-pane projects
+    projects = enrich_with_team_context(projects)
 
     session_name = sanitize_name(args.session)
 
