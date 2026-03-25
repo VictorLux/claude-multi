@@ -71,7 +71,17 @@ Maps skill presets to system prompts:
 - Custom `label` overrides skill label
 - Per-pane `model` and `effort` configuration
 
-### 4. Project Validator (`validate_projects`)
+### 4. Team Context Enricher (`enrich_with_team_context`)
+
+When multiple panes share the same project directory:
+- Groups panes by resolved path
+- Creates `.claude-multi-shared.md` in the project root (shared notes file)
+- Appends collaboration instructions to each pane's system prompt:
+  - Lists teammates and their roles
+  - Rules for reading/writing the shared notes file
+  - Coordination protocol for shared file edits
+
+### 5. Project Validator (`validate_projects`)
 
 - Resolves and validates paths (`Path.expanduser().resolve()`)
 - Deduplicates by path+skill+model combo (same path with different skills is allowed)
@@ -98,10 +108,10 @@ Generates `~/.config/claude-multi/tmux.conf` on each launch:
 ### 7. Layout Builder (`build_layout_commands`)
 
 Builds tmux split-window + select-layout commands:
-- **Grid**: Uses tmux `tiled` layout
+- **Grid (4+ panes)**: Creates 2-column layout — left column = first project, right column = second. Projects are sorted by path so grouping is consistent.
+- **Grid (2-3 panes)**: Uses tmux `tiled` layout
 - **Horizontal**: Uses `even-horizontal`
 - **Vertical**: Uses `even-vertical`
-- Applies layout after each split to handle any pane count
 
 ### 8. Script Generator (`generate_scripts`)
 
@@ -163,7 +173,11 @@ Generates helper shell scripts in `~/.config/claude-multi/scripts/`:
 
 2. **`send-keys` for all panes**: All panes launched consistently via `send-keys` rather than having the first pane use `new-session`'s shell command. This ensures consistent behavior across panes.
 
-3. **Tmux `tiled` layout for grid**: Instead of manually tracking pane indices (which break when tmux renumbers after splits), we use tmux's built-in `tiled` layout and let it handle pane arrangement.
+3. **2-column grid groups by project**: For 4+ panes, the grid creates explicit left/right columns via horizontal split, then splits each column vertically. Projects are sorted by path so the left column contains the first project and the right column contains the second. For 2-3 panes, falls back to tmux `tiled` layout.
+
+7. **Team collaboration via shared file**: Rather than complex IPC between Claude sessions, we use a simple `.claude-multi-shared.md` file in the project root. Each session's system prompt includes instructions to read/write this file. This is stateless, debuggable, and works with any number of sessions.
+
+8. **System prompts in files**: System prompts are written to `scripts/prompt-{i}.txt` files and loaded via `cat` at launch time. This avoids shell quoting nightmares when passing multi-line prompts with special characters through tmux `send-keys`.
 
 4. **Self-rescheduling timer**: The upgrade checker uses `tmux run-shell -b "sleep N && bash self"` instead of a Python background thread, because the Python process is replaced by `tmux attach` via `os.execvp`.
 

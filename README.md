@@ -116,15 +116,32 @@ color = "cyan"
 
 ## Layouts
 
+**Grid (default)** — groups panes by project (left column = project A, right column = project B):
+
 ```
-Grid (default)              Horizontal                Vertical
-┌────────┬────────┐    ┌────┬────┬────┐    ┌──────────────────┐
-│ pane 1 │ pane 2 │    │  1 │  2 │  3 │    │      pane 1      │
-├────────┼────────┤    └────┴────┴────┘    ├──────────────────┤
-│ pane 3 │ pane 4 │                        │      pane 2      │
-├────────┼────────┤                        ├──────────────────┤
-│ pane 5 │ pane 6 │                        │      pane 3      │
-└────────┴────────┘                        └──────────────────┘
+┌─────────────────────┬─────────────────────┐
+│ project-a/backend   │ project-b/crypto     │
+│ (opus/high)         │ (opus/high)          │
+├─────────────────────┼─────────────────────┤
+│ project-a/security  │ project-b/rust       │
+│ (sonnet/medium)     │ (sonnet/medium)      │
+├─────────────────────┼─────────────────────┤
+│ project-a/test-auto │ project-b/reviewer   │
+│ (sonnet/medium)     │ (haiku/low)          │
+└─────────────────────┴─────────────────────┘
+```
+
+**Horizontal** and **Vertical**:
+
+```
+Horizontal                    Vertical
+┌────┬────┬────┐    ┌──────────────────┐
+│  1 │  2 │  3 │    │      pane 1      │
+└────┴────┴────┘    ├──────────────────┤
+                    │      pane 2      │
+                    ├──────────────────┤
+                    │      pane 3      │
+                    └──────────────────┘
 ```
 
 ```bash
