@@ -8,7 +8,7 @@ Each pane gets a persistent header showing project name, Claude version, model, 
 
 ### Demo — 6 panes with zoom in/out
 
-https://github.com/VictorLux/claude-multi/raw/main/docs/images/claude-multi-demo.mp4
+https://github.com/user-attachments/assets/44fefb3c-5fd7-49e3-a768-869fdd800ffb
 
 > **DISCLAIMER:** This is an independent, community-built tool. It is **not** an official Anthropic product. It is not affiliated with, endorsed by, or supported by Anthropic. Claude Code is a trademark of Anthropic. Use at your own risk. This tool launches Claude Code sessions on your behalf and may incur API usage costs depending on your plan. The authors are not responsible for any costs, damages, or issues arising from use of this tool.
 
