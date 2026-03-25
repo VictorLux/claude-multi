@@ -7,3 +7,5 @@ build/
 .env
 .claude/
 config.toml
+.claude-multi-shared.md
+scripts/prompt-*.txt
