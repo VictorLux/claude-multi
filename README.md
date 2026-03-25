@@ -191,18 +191,18 @@ When multiple panes share the same project, they automatically coordinate:
 2. **Team awareness**: Each session's system prompt includes who its teammates are and their roles.
 3. **Coordination rules**: Sessions are instructed to check the shared file before major decisions, write findings, and avoid conflicting edits.
 
-Example: if your soltrader project has a `quant` pane and a `security` pane, the security expert will see the quant's findings and vice versa.
+Example: if your project has a `backend` pane and a `security` pane, the security expert will see the backend dev's findings and vice versa.
 
 ```
 # .claude-multi-shared.md (auto-created)
 
 ## Active sessions
-- soltrader/quant (model: opus, effort: high)
-- soltrader/security (model: sonnet, effort: medium)
+- my-app/backend (model: opus, effort: high)
+- my-app/security (model: sonnet, effort: medium)
 
 ## Shared Notes
-[soltrader/quant] Found potential race condition in order execution...
-[soltrader/security] Reviewing the race condition — confirmed, also affects stop-loss logic...
+[my-app/backend] Refactored auth middleware, now uses JWT validation...
+[my-app/security] Reviewing JWT implementation — found missing token expiry check...
 ```
 
 Add `.claude-multi-shared.md` to your project's `.gitignore` — it's session-specific, not for version control.

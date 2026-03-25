@@ -647,7 +647,7 @@ def generate_scripts(scripts_dir: Path) -> None:
 #!/bin/bash
 # Pane wrapper for claude-multi
 # Args: $1=project_path $2=project_name $3=color
-# Optional env: CM_MODEL, CM_SYSTEM_PROMPT, CM_EFFORT
+# Optional env: CM_MODEL, CM_SYSTEM_PROMPT_FILE, CM_EFFORT
 set -euo pipefail
 
 PROJECT_PATH="$1"
@@ -655,7 +655,7 @@ PROJECT_NAME="$2"
 COLOR="$3"
 PANE_ID="${TMUX_PANE:-}"
 MODEL="${CM_MODEL:-}"
-SYSTEM_PROMPT="${CM_SYSTEM_PROMPT:-}"
+PROMPT_FILE="${CM_SYSTEM_PROMPT_FILE:-}"
 EFFORT="${CM_EFFORT:-}"
 
 cd "$PROJECT_PATH"
@@ -664,19 +664,23 @@ get_claude_version() {
     claude --version 2>/dev/null | head -1 | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' || echo "unknown"
 }
 
-# Build extra claude flags from env
-build_claude_args() {
-    EXTRA_ARGS=""
+# Build claude command as an array (no eval needed)
+build_claude_cmd() {
+    local mode="$1"  # "start" or "continue"
+    CMD=(claude)
+    if [ "$mode" = "continue" ]; then
+        CMD+=(--continue)
+    fi
+    CMD+=(--name "$PROJECT_NAME")
     if [ -n "$MODEL" ]; then
-        EXTRA_ARGS="$EXTRA_ARGS --model $MODEL"
+        CMD+=(--model "$MODEL")
     fi
     if [ -n "$EFFORT" ]; then
-        EXTRA_ARGS="$EXTRA_ARGS --effort $EFFORT"
+        CMD+=(--effort "$EFFORT")
     fi
-    if [ -n "$SYSTEM_PROMPT" ]; then
-        EXTRA_ARGS="$EXTRA_ARGS --system-prompt \\"$SYSTEM_PROMPT\\""
+    if [ -n "$PROMPT_FILE" ] && [ -f "$PROMPT_FILE" ]; then
+        CMD+=(--system-prompt "$(cat "$PROMPT_FILE")")
     fi
-    echo "$EXTRA_ARGS"
 }
 
 update_title() {
@@ -698,16 +702,17 @@ update_title() {
 
 FIRST_RUN=1
 while true; do
-    EXTRA=$(build_claude_args)
     if [ "$FIRST_RUN" -eq 1 ]; then
         update_title "● running"
-        eval claude --name \\"$PROJECT_NAME\\" $EXTRA || true
+        build_claude_cmd "start"
+        "${CMD[@]}" || true
         FIRST_RUN=0
     else
         update_title "● restarting..."
         sleep 1
         update_title "● running"
-        eval claude --continue --name \\"$PROJECT_NAME\\" $EXTRA || eval claude --name \\"$PROJECT_NAME\\" $EXTRA || true
+        build_claude_cmd "continue"
+        "${CMD[@]}" || { build_claude_cmd "start"; "${CMD[@]}" || true; }
     fi
 
     update_title "● stopped"
@@ -935,9 +940,11 @@ def create_session(
         if effort:
             env_prefix += f"CM_EFFORT='{effort}' "
         if system_prompt:
-            # Escape single quotes in the prompt
-            safe_prompt = system_prompt.replace("'", "'\\''")
-            env_prefix += f"CM_SYSTEM_PROMPT='{safe_prompt}' "
+            # Write prompt to a file (avoids shell quoting issues)
+            prompt_file = SCRIPTS_DIR / f"prompt-{i}.txt"
+            prompt_file.write_text(system_prompt)
+            os.chmod(prompt_file, 0o600)
+            env_prefix += f"CM_SYSTEM_PROMPT_FILE='{prompt_file}' "
 
         # Launch wrapper — clear first so the command line is not visible
         wrapper = str(SCRIPTS_DIR / "pane-wrapper.sh")

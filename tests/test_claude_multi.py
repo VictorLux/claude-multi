@@ -295,9 +295,10 @@ def test_generate_scripts():
             assert script.exists(), f"Missing: {name}"
             assert os.access(script, os.X_OK), f"Not executable: {name}"
 
-        # pane-wrapper uses claude --name
+        # pane-wrapper uses claude and --name
         wrapper = (scripts_dir / "pane-wrapper.sh").read_text()
-        assert "claude --name" in wrapper
+        assert "--name" in wrapper
+        assert "claude" in wrapper
 
         # restart uses SIGTERM (kill -TERM), not SIGINT (Ctrl+C)
         restart = (scripts_dir / "restart.sh").read_text()
