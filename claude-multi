@@ -385,6 +385,11 @@ def validate_projects(
         if "effort" in skill_info:
             proj["effort"] = skill_info["effort"]
 
+        # Background color from config
+        bg = item.get("bg")
+        if bg:
+            proj["bg"] = bg
+
         projects.append(proj)
 
         if len(projects) >= MAX_SESSIONS:
@@ -772,59 +777,40 @@ done
     # restart.sh — restart claude in a specific pane using SIGTERM
     write_script(scripts_dir / "restart.sh", """\
 #!/bin/bash
-# Restart claude in a specific pane via SIGTERM
+# Restart claude in a specific pane
 # Args: $1=pane_id $2=session_name
 set -uo pipefail
 PANE_ID="$1"
 SESSION="$2"
 
-# Find the claude process running in this pane
-PANE_PID=$(tmux display-message -t "$PANE_ID" -p '#{pane_pid}' 2>/dev/null || echo "")
-if [ -z "$PANE_PID" ]; then
+# Only restart panes managed by claude-multi (have @cm_info set)
+CM_INFO=$(tmux show-options -p -t "$PANE_ID" -v @cm_info 2>/dev/null || echo "")
+if [ -z "$CM_INFO" ]; then
     exit 0
 fi
 
-# Find claude child process of the pane shell
-CLAUDE_PID=$(pgrep -P "$PANE_PID" -f "claude" 2>/dev/null | head -1 || echo "")
-if [ -z "$CLAUDE_PID" ]; then
-    # No claude running, just send Enter to trigger restart in wrapper
-    tmux send-keys -t "$PANE_ID" Enter
-    exit 0
-fi
-
-# Send SIGTERM for graceful shutdown
-kill -TERM "$CLAUDE_PID" 2>/dev/null || true
-
-# Wait up to 5 seconds for graceful exit
-for i in $(seq 1 10); do
-    if ! kill -0 "$CLAUDE_PID" 2>/dev/null; then
-        break
-    fi
-    sleep 0.5
-done
-
-# SIGKILL if still alive
-if kill -0 "$CLAUDE_PID" 2>/dev/null; then
-    kill -KILL "$CLAUDE_PID" 2>/dev/null || true
-fi
-
-# Wait a moment then send Enter to trigger restart in the wrapper loop
-sleep 1
-tmux send-keys -t "$PANE_ID" Enter
+# Send Ctrl+C to stop Claude gracefully, wait, then Enter to trigger wrapper restart
+tmux send-keys -t "$PANE_ID" C-c
+sleep 3
+tmux send-keys -t "$PANE_ID" "" Enter
 """)
 
     # restart-all.sh — restart all panes
     write_script(scripts_dir / "restart-all.sh", """\
 #!/bin/bash
-# Restart claude in all panes
+# Restart claude in all managed panes (skips temp panes like upgrade)
 # Args: $1=session_name
 set -uo pipefail
 SESSION="$1"
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Only restart panes that have @cm_info (managed by claude-multi)
 PANES=$(tmux list-panes -t "$SESSION" -F '#{pane_id}' 2>/dev/null || echo "")
 for PANE in $PANES; do
-    bash "$SCRIPTS_DIR/restart.sh" "$PANE" "$SESSION" &
+    CM_INFO=$(tmux show-options -p -t "$PANE" -v @cm_info 2>/dev/null || echo "")
+    if [ -n "$CM_INFO" ]; then
+        bash "$SCRIPTS_DIR/restart.sh" "$PANE" "$SESSION" &
+    fi
 done
 wait
 """)
@@ -855,10 +841,16 @@ fi
 echo ""
 echo "Upgrading..."
 if npm update -g @anthropic-ai/claude-code; then
+    NEW_VER=$(claude --version 2>/dev/null | head -1 || echo "unknown")
     echo ""
-    echo "Upgrade complete. Restarting all sessions..."
-    sleep 1
-    bash "$SCRIPTS_DIR/restart-all.sh" "$SESSION"
+    echo "Upgrade complete! New version: $NEW_VER"
+    echo ""
+    echo "Now restart your panes to use the new version:"
+    echo "  Ctrl+B r  → restart current pane"
+    echo "  Ctrl+B R  → restart all panes"
+    echo ""
+    echo "Press Enter to close this window."
+    read -r
 else
     echo ""
     echo "ERROR: Upgrade failed. Check permissions (you may need sudo)."
@@ -866,8 +858,6 @@ else
     read -r
     exit 1
 fi
-
-sleep 2
 """)
 
     # check-upgrade.sh — silent upgrade check, self-rescheduling timer
@@ -976,6 +966,14 @@ def create_session(
             "set-option", "-p", "-t", f"{session_name}:0.{i}",
             "@cm_color", proj["color"],
         ])
+
+        # Set per-pane background color if configured
+        bg = proj.get("bg", "")
+        if bg:
+            run_tmux([
+                "select-pane", "-t", f"{session_name}:0.{i}",
+                "-P", f"bg={bg}",
+            ])
 
         # Build env vars for skill/model/effort
         env_prefix = ""

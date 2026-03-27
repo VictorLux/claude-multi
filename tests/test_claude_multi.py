@@ -300,9 +300,10 @@ def test_generate_scripts():
         assert "--name" in wrapper
         assert "claude" in wrapper
 
-        # restart uses SIGTERM (kill -TERM), not SIGINT (Ctrl+C)
+        # restart sends Ctrl+C and only restarts managed panes
         restart = (scripts_dir / "restart.sh").read_text()
-        assert "kill -TERM" in restart
+        assert "C-c" in restart
+        assert "@cm_info" in restart
 
         # upgrade has confirmation prompt
         upgrade = (scripts_dir / "upgrade.sh").read_text()
