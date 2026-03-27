@@ -578,27 +578,31 @@ set-hook -g after-new-session "run-shell -b '{scripts_dir}/check-upgrade.sh {saf
     content = f"""\
 # claude-multi tmux configuration (auto-generated)
 # Do not edit — regenerated on each launch
+# ═══════════════════════════════════════════════
+#   R E T R O   C R T   T E R M I N A L   M O D E
+#   IBM 3270 / Apple II vibes
+# ═══════════════════════════════════════════════
 
 # Enable pane border status at top
 set-option -wg pane-border-status top
 
-# Active pane: bright green arrow + bold info. Inactive: dim grey.
-set-option -wg pane-border-format "#{{?pane_active,#[fg=colour46 bold] ▶ #{{@cm_info}} ,#[fg=colour240]   #{{@cm_info}} }}"
+# Active pane: bright phosphor arrow. Inactive: dim scanline grey.
+set-option -wg pane-border-format "#{{?pane_active,#[fg=colour46 bold] ░▓ #{{@cm_info}} ▓░ ,#[fg=colour58]  ░ #{{@cm_info}} ░ }}"
 
-# Active border: bright green. Inactive: dark grey.
+# Active border: CRT phosphor green. Inactive: faded terminal grey.
 set-option -g pane-active-border-style "fg=colour46,bold"
-set-option -g pane-border-style "fg=colour240"
+set-option -g pane-border-style "fg=colour58"
 
 # Mouse support (click to switch panes)
 set-option -g mouse on
 
-# Status bar — help shortcuts
+# Status bar — retro CRT style
 set-option -g status on
 set-option -g status-position bottom
-set-option -g status-style "bg=colour233,fg=colour245"
-set-option -g status-left "#[bg=colour22,fg=colour46,bold] claude-multi #[default] "
-set-option -g status-left-length 20
-set-option -g status-right " #[fg=colour250]^B+Arrows#[fg=colour240]:navigate #[fg=colour250]^B+r#[fg=colour240]:restart #[fg=colour250]^B+R#[fg=colour240]:all #[fg=colour250]^B+U#[fg=colour240]:upgrade #[fg=colour250]^B+z#[fg=colour240]:zoom #[fg=colour250]^B+x#[fg=colour240]:close #[fg=colour250]^B+d#[fg=colour240]:detach "
+set-option -g status-style "bg=colour232,fg=colour40"
+set-option -g status-left "#[bg=colour22,fg=colour46,bold] ▌CLAUDE-MULTI▐ #[bg=colour232] "
+set-option -g status-left-length 22
+set-option -g status-right " #[fg=colour40]^B+Arrows#[fg=colour58]:NAV #[fg=colour40]^B+r#[fg=colour58]:RESTART #[fg=colour40]^B+R#[fg=colour58]:ALL #[fg=colour40]^B+U#[fg=colour58]:UPGRADE #[fg=colour40]^B+z#[fg=colour58]:ZOOM #[fg=colour40]^B+x#[fg=colour58]:CLOSE #[fg=colour40]^B+d#[fg=colour58]:DETACH "
 set-option -g status-right-length 150
 set-option -g window-status-format ""
 set-option -g window-status-current-format ""
@@ -967,12 +971,18 @@ def create_session(
             "@cm_color", proj["color"],
         ])
 
-        # Set per-pane background color if configured
+        # Set per-pane background and foreground colors if configured
         bg = proj.get("bg", "")
+        fg = proj.get("color", "")
+        style_parts = []
         if bg:
+            style_parts.append(f"bg={bg}")
+        if fg:
+            style_parts.append(f"fg={fg}")
+        if style_parts:
             run_tmux([
                 "select-pane", "-t", f"{session_name}:0.{i}",
-                "-P", f"bg={bg}",
+                "-P", ",".join(style_parts),
             ])
 
         # Build env vars for skill/model/effort
